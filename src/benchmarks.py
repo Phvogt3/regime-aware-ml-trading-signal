@@ -14,7 +14,7 @@ gap is due to the signal, not to accounting differences.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence
 
 import pandas as pd
 
@@ -23,14 +23,16 @@ from .backtest import BacktestResult
 
 
 def buy_and_hold(features: pd.DataFrame,
-                 cost_bps: Optional[float] = None) -> BacktestResult:
-    fwd = backtest.fwd_return_matrix(features)
-    w = backtest.buy_and_hold_weights(fwd)
+                 cost_bps: Optional[float] = None,
+                 universe: Optional[Sequence[str]] = None) -> BacktestResult:
+    fwd = backtest.fwd_return_matrix(features, universe=universe)
+    w = backtest.buy_and_hold_weights(fwd, universe=universe)
     return backtest.run_backtest(w, fwd, cost_bps=cost_bps)
 
 
 def ma_crossover(features: pd.DataFrame,
-                 cost_bps: Optional[float] = None) -> BacktestResult:
-    fwd = backtest.fwd_return_matrix(features)
-    w = backtest.ma_crossover_weights(features)
+                 cost_bps: Optional[float] = None,
+                 universe: Optional[Sequence[str]] = None) -> BacktestResult:
+    fwd = backtest.fwd_return_matrix(features, universe=universe)
+    w = backtest.ma_crossover_weights(features, universe=universe)
     return backtest.run_backtest(w, fwd, cost_bps=cost_bps)

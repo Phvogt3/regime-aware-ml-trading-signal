@@ -86,14 +86,17 @@ def run(prices: pd.DataFrame, vix: pd.DataFrame,
                                       pca_components=pca_components)
 
     # ML backtest on OOS predictions.
-    fwd = backtest.fwd_return_matrix(wf.predictions)
-    ml_w = backtest.ml_weights(wf.predictions, target=target)
+    # The traded universe is whatever was modeled, so a 500 stock run trades 500
+    # stocks and its benchmarks cover the same names.
+    universe = sorted(feats["ticker"].unique())
+    fwd = backtest.fwd_return_matrix(wf.predictions, universe=universe)
+    ml_w = backtest.ml_weights(wf.predictions, target=target, universe=universe)
     ml_res = backtest.run_backtest(ml_w, fwd, cost_bps=cost_bps)
 
     # Benchmarks over the same OOS date span for a fair comparison.
     oos_feats = feats[feats["date"].isin(wf.predictions["date"].unique())]
-    bh_res = benchmarks.buy_and_hold(oos_feats, cost_bps=cost_bps)
-    ma_res = benchmarks.ma_crossover(oos_feats, cost_bps=cost_bps)
+    bh_res = benchmarks.buy_and_hold(oos_feats, cost_bps=cost_bps, universe=universe)
+    ma_res = benchmarks.ma_crossover(oos_feats, cost_bps=cost_bps, universe=universe)
 
     results = {"ML strategy": ml_res, "Buy & hold": bh_res, "MA crossover": ma_res}
     summary = evaluation.summary_table(results)

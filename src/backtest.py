@@ -31,7 +31,7 @@ the step return.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -127,15 +127,29 @@ def run_backtest(weights: pd.DataFrame, fwd_returns: pd.DataFrame,
 # Weight-matrix builders (each returns a wide date x ticker frame).
 # ------------------------------------------------------------------
 
+def _universe(frame_tickers, universe: Optional[Sequence[str]] = None) -> List[str]:
+    """
+    Tickers the portfolio may hold. Defaults to every ticker present in the data,
+    so a larger universe (for example the S&P 500) is actually traded instead of
+    being silently trimmed to the 15 names in config.TICKERS.
+    """
+    present = list(dict.fromkeys(frame_tickers))
+    if universe is None:
+        return present
+    keep = set(universe)
+    return [t for t in present if t in keep]
+
+
 def _universe_size(tickers) -> int:
-    present = [t for t in tickers if t in config.TICKERS]
-    return max(len(present), 1)
+    return max(len(list(tickers)), 1)
 
 
-def fwd_return_matrix(long_df: pd.DataFrame) -> pd.DataFrame:
+def fwd_return_matrix(long_df: pd.DataFrame,
+                      universe: Optional[Sequence[str]] = None) -> pd.DataFrame:
     """Pivot a long frame with ['date','ticker','fwd_return'] to wide."""
-    tickers = long_df.loc[long_df["ticker"].isin(config.TICKERS)]
-    return tickers.pivot_table(index="date", columns="ticker", values="fwd_return")
+    keep = _universe(long_df["ticker"].unique(), universe)
+    rows = long_df.loc[long_df["ticker"].isin(keep)]
+    return rows.pivot_table(index="date", columns="ticker", values="fwd_return")
 
 
 def _long_indicator_to_weights(is_long: pd.DataFrame) -> pd.DataFrame:
@@ -145,13 +159,15 @@ def _long_indicator_to_weights(is_long: pd.DataFrame) -> pd.DataFrame:
     return is_long.astype(float) * per_name
 
 
-def ml_weights(predictions: pd.DataFrame, target: str = "binary") -> pd.DataFrame:
+def ml_weights(predictions: pd.DataFrame, target: str = "binary",
+               universe: Optional[Sequence[str]] = None) -> pd.DataFrame:
     """
     Build target weights from walk-forward predictions. Long when the predicted
     class is 'up' (binary: class 1; 3-class: class 2), flat otherwise. Shorting
     is off by default (long/flat baseline); enable via BacktestConfig.
     """
-    preds = predictions[predictions["ticker"].isin(config.TICKERS)].copy()
+    keep = _universe(predictions["ticker"].unique(), universe)
+    preds = predictions[predictions["ticker"].isin(keep)].copy()
     if target == "binary":
         preds["is_long"] = preds["pred_class"] == 1
     else:  # 3-class: up == 2
@@ -161,15 +177,17 @@ def ml_weights(predictions: pd.DataFrame, target: str = "binary") -> pd.DataFram
     return _long_indicator_to_weights(is_long)
 
 
-def buy_and_hold_weights(fwd_returns: pd.DataFrame) -> pd.DataFrame:
+def buy_and_hold_weights(fwd_returns: pd.DataFrame,
+                         universe: Optional[Sequence[str]] = None) -> pd.DataFrame:
     """Initial equal-weight purchase whose weights subsequently drift without trades."""
     if fwd_returns.empty:
         return fwd_returns.copy()
 
     returns = fwd_returns.fillna(0.0)
     first_available = fwd_returns.iloc[0].notna()
+    keep = set(_universe(fwd_returns.columns, universe))
     eligible = [c for c in fwd_returns.columns
-                if c in config.TICKERS and bool(first_available[c])]
+                if c in keep and bool(first_available[c])]
     n = max(len(eligible), 1)
     current = pd.Series(0.0, index=fwd_returns.columns)
     current.loc[eligible] = B.max_gross_exposure / n
@@ -186,13 +204,15 @@ def buy_and_hold_weights(fwd_returns: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, index=fwd_returns.index, columns=fwd_returns.columns)
 
 
-def ma_crossover_weights(features: pd.DataFrame) -> pd.DataFrame:
+def ma_crossover_weights(features: pd.DataFrame,
+                         universe: Optional[Sequence[str]] = None) -> pd.DataFrame:
     """
     Naive rules benchmark: long when the fast SMA is above the slow SMA
     (sma_cross > 0), flat otherwise. Same sizing and costs as the ML strategy,
     so the comparison is apples-to-apples.
     """
-    f = features[features["ticker"].isin(config.TICKERS)].copy()
+    keep = _universe(features["ticker"].unique(), universe)
+    f = features[features["ticker"].isin(keep)].copy()
     f["is_long"] = f["sma_cross"] > 0
     is_long = f.pivot_table(index="date", columns="ticker",
                             values="is_long", fill_value=False).astype(bool)

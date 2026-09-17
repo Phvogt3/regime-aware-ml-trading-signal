@@ -92,6 +92,35 @@ def test_partitioned_storage_roundtrip_and_pruning(synthetic_prices, tmp_path, m
     assert only["date"].dt.year.between(2020, 2021).all()
 
 
+def test_backtest_trades_the_universe_it_is_given():
+    """
+    Tickers outside config.TICKERS must still be traded. This was a real bug: the
+    weight builders filtered to the 15 default names, so a 500 stock run traded
+    only those 15 and its benchmarks did too.
+    """
+    from src import backtest
+
+    dates = pd.bdate_range("2021-01-01", periods=4)
+    preds = pd.DataFrame({
+        "date": list(dates) * 2,
+        "ticker": ["AAPL"] * 4 + ["ZZZZ"] * 4,     # ZZZZ is not in config.TICKERS
+        "pred_class": [1, 1, 0, 1, 1, 0, 1, 1],
+        "fwd_return": [0.01, -0.01, 0.02, 0.0] * 2,
+    })
+    w = backtest.ml_weights(preds)
+    assert list(w.columns) == ["AAPL", "ZZZZ"]
+    assert w.to_numpy().max() == pytest.approx(0.5)      # 1 / 2 names, not 1 / 15
+
+    fwd = backtest.fwd_return_matrix(preds)
+    assert list(fwd.columns) == ["AAPL", "ZZZZ"]
+    bh = backtest.buy_and_hold_weights(fwd)
+    assert bh.iloc[0].sum() == pytest.approx(1.0)
+
+    # An explicit universe still restricts what can be held.
+    only_aapl = backtest.ml_weights(preds, universe=["AAPL"])
+    assert list(only_aapl.columns) == ["AAPL"]
+
+
 def test_ablation_variants_drop_exactly_one_group():
     variants = experiments.ablation_variants()
     assert len(variants["All features"]) == len(FEATURE_COLUMNS)
