@@ -2,9 +2,9 @@
 
 Can a machine learning model built from technical indicators beat simple strategies after trading costs, and does the answer change when markets get volatile?
 
-**Short answer: no.** The model earns positive returns but well below buy and hold on a risk adjusted basis, and its ROC-AUC of 0.500 means it has no real skill at ranking days. The value of this project is that the result is measured honestly, with no lookahead, real trading costs, and a test that proves the model never sees the future.
+**Short answer: no.** The model earns positive returns but well below buy and hold on a risk adjusted basis, and its ROC-AUC of 0.500 means it has no real skill at ranking days. Scaling from 15 stocks to 502 makes the gap worse, not better. The value of this project is that the result is measured honestly, with no lookahead, real trading costs, and a test that proves the model never sees the future.
 
-[Live dashboard](https://regime-trading-signal.streamlit.app) · Python 3.12
+Python 3.12
 
 ## The question
 
@@ -19,7 +19,7 @@ Framing it as "can I predict stock prices" would miss the point. A model can be 
 
 15 large, heavily traded stocks across technology, finance, and consumer companies, plus SPY as a market reference and the VIX, which tracks how much volatility the market expects. Daily prices come from Yahoo Finance, adjusted for splits and dividends, covering January 2014 through mid 2026. That window includes the 2015 to 2019 bull market, the 2020 COVID crash, the 2022 selloff when rates rose, and the recovery after.
 
-A cached copy lives in `data/`, so nothing needs to download for the code to run.
+A cached copy lives in `data/`, so nothing needs to download for the code to run. There is also a 502 stock S&P 500 version, described further down.
 
 ## Features
 
@@ -80,7 +80,20 @@ The one thing it does well is take less risk. Its beta to the basket is 0.39 and
 | Normal (VIX 20 to 30) | 607 | 0.65 |
 | Stressed (VIX over 30) | 154 | 1.40 |
 
-Results do get better as volatility rises, which is the pattern the project was built to look for. The catch is that the stressed regime covers only 154 days, so that 1.40 could easily be luck. It is reported as a possible pattern, not a finding.
+Results do get better as volatility rises, which is the pattern the project was built to look for. The catch is that the stressed regime covers only 154 days, and the S&P 500 run below shows that number shrinking once there is more data.
+
+## Results, 502 stocks
+
+| | 15 stocks | S&P 500 |
+|---|---|---|
+| ML Sharpe | 0.54 | 0.33 |
+| Buy and hold Sharpe | 1.21 | 1.01 |
+| ML yearly growth | 6.8% | 3.8% |
+| Max drawdown | -34.5% | -30.9% |
+| ROC-AUC | 0.500 | 0.498 |
+| Stressed regime Sharpe | 1.40 | 0.66 |
+
+Nobody can dismiss the 15 stock result as a small or cherry picked sample, because 1.45 million rows say the same thing. The stressed regime Sharpe falling from 1.40 to 0.66 is the most useful detail here: with 33 times more data, the apparent edge in volatile markets mostly disappeared, which is what noise does.
 
 ## Model checks
 
@@ -104,8 +117,6 @@ Momentum and trend features help. The rest hurt slightly, and the VIX features h
 
 **PCA.** The first 3 components hold 73 percent of the variation in all 17 features, and 7 reach 90 percent, so the indicators overlap heavily. Training on components did not help: 0.47 keeping 90 percent of variance, 0.58 with 5 components.
 
-**S&P 500.** The same model on about 500 stocks, to check whether the conclusion holds on a much bigger, more varied universe. Results land in `results/sp500/`.
-
 ## Scaling to the S&P 500
 
 At roughly 1.5 million daily rows, a single file loaded into pandas stops being a good idea, so `src/large_data.py` uses three techniques:
@@ -114,7 +125,7 @@ At roughly 1.5 million daily rows, a single file loaded into pandas stops being 
 2. **Partition pruning.** Ticker and year filters are pushed down to pyarrow, which skips entire folders before reading anything.
 3. **Parallel feature engineering.** Stocks are independent, so features are computed across CPU cores. A test confirms the parallel output matches the serial output exactly. Building features for 1.45 million rows takes under 3 seconds.
 
-The dataset itself is not committed because of its size. Saved results are.
+The dataset itself (about 97 MB across 6,286 files) is not committed. Saved results are.
 
 ## Setup
 
@@ -128,7 +139,7 @@ pip install -r requirements.txt
 ```bash
 streamlit run app.py                                  # the dashboard
 python scripts/run_pipeline.py --model rf             # headline results in the terminal
-python scripts/run_pipeline.py --model logreg --tune  # try the baseline model with tuning
+python scripts/run_pipeline.py --model logreg --tune  # baseline model with tuning
 python scripts/run_experiments.py                     # all model checks
 pytest -q                                             # 38 tests, runs offline
 ```
@@ -143,6 +154,7 @@ The cached data covers everything above. To refresh prices, run `python -m src.d
 4. **Many choices were searched.** Picking indicators, windows, and the 0.5 percent flat band is its own form of fitting. Walk forward testing guards against overfitting within a run, not against trying many designs.
 5. **Sharpe and Sortino assume a zero risk free rate**, which flatters absolute levels. Comparisons between strategies are unaffected, since all are treated the same way.
 6. **No shorting, no leverage, no intraday data, and no sizing by confidence.** Those are natural extensions, not claims made here.
+7. **An early version of the backtest traded only the 15 default stocks** no matter which universe was modeled, which made the first S&P 500 run look better than it was. `tests/test_extensions.py` now checks that the portfolio trades whatever universe it is given.
 
 ## Project structure
 
