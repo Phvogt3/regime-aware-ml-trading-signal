@@ -1,292 +1,176 @@
-# Regime-Aware ML Trading Signal
+# Regime Aware ML Trading Signal
 
-A rigorous, leakage-safe backtest of a technical-indicator machine-learning trading
-signal across multiple volatility regimes.
+Can a machine learning model built from technical indicators beat simple strategies after trading costs, and does the answer change when markets get volatile?
 
-## Research question
+**Short answer: no.** The model earns positive returns but well below buy and hold on a risk adjusted basis, and its ROC-AUC of 0.500 means it has no real skill at ranking days. The value of this project is that the result is measured honestly, with no lookahead, real trading costs, and a test that proves the model never sees the future.
 
-> **Does a technical-indicator-based ML signal generate risk-adjusted returns above a
-> naive benchmark, after realistic transaction costs, and does that edge hold up across
-> different volatility regimes?**
+[Live dashboard](https://regime-trading-signal.streamlit.app) · Python 3.12
 
-This is deliberately *not* "can I predict stock prices." Framing the project as a
-prediction contest is what makes most student versions worthless: a model can be 55%
-accurate and lose money to costs, or 45% accurate and profitable with good sizing. The
-value here is the **rigor of the evaluation**, not a claim that the strategy beats the
-market. The strongest honest finding a project like this usually reaches is a *modest,
-regime-dependent* edge, and that is presented as-is, not tuned to sound impressive.
+## The question
 
-## What's in the box
+Traders watch indicators like RSI and moving averages constantly, but each one predicts very little on its own. This project combines 17 of them into one model and asks two things:
 
-- **Data pipeline** (`src/data.py`), daily OHLCV for 15 large-caps across tech,
-  financials, and consumer, plus SPY as an optional cached reference and the VIX.
-- **Feature engineering** (`src/features.py`), SMA/EMA crossovers, MACD, RSI, ROC,
-  stochastics, Bollinger width/position, rolling volatility, volume ratio, on-balance
-  volume, **fractionally-differenced log price**, VIX level and **trailing-year VIX
-  percentile**. Every feature is causal.
-- **Labeling** (`src/labeling.py`), binary next-day direction and a 3-class
-  up/flat/down deadband (±0.5%).
-- **Models** (`src/models.py`), Logistic Regression (interpretable baseline), Random
-  Forest (main model).
-- **Walk-forward validation** (`src/walkforward.py`), rolling ~2-year train / ~6-month
-  test, rolled through history. No random splits.
-- **Custom backtest engine** (`src/backtest.py`), a from-scratch day-by-day loop with
-  equal-weight sizing, transaction costs, and no lookahead. Benchmarks
-  (`src/benchmarks.py`) run through the *same* engine.
-- **Evaluation** (`src/evaluation.py`), Sharpe, Sortino, max drawdown, win rate,
-  average win/loss; accuracy reported as explicitly secondary.
-- **Regime analysis** (`src/regime.py`), performance split by VIX level.
-- **Streamlit app** (`app.py`), a live view of the pipeline, styled to match the FOMC
-  dashboard.
-- **Tests** (`tests/`), including an empirical no-lookahead proof.
+1. Does the model earn more return per unit of risk than simply holding the stocks, after paying to trade?
+2. Does any advantage depend on whether the market is calm or stressed?
+
+Framing it as "can I predict stock prices" would miss the point. A model can be right 55% of the time and lose money to costs, or right 45% of the time and make money if the wins are bigger. Return per unit of risk is the measure that matters.
+
+## Data
+
+15 large, heavily traded stocks across technology, finance, and consumer companies, plus SPY as a market reference and the VIX, which tracks how much volatility the market expects. Daily prices come from Yahoo Finance, adjusted for splits and dividends, covering January 2014 through mid 2026. That window includes the 2015 to 2019 bull market, the 2020 COVID crash, the 2022 selloff when rates rose, and the recovery after.
+
+A cached copy lives in `data/`, so nothing needs to download for the code to run.
+
+## Features
+
+Every feature for a given day uses only data available by the previous day's close. There are 17, in six families:
+
+| Family | Features |
+|---|---|
+| Trend | Fast and slow moving average gaps (simple and exponential), MACD line, signal, and histogram |
+| Momentum | RSI, rate of change, stochastic oscillator (%K and %D) |
+| Volatility | Bollinger Band width, price position inside the bands, rolling return volatility |
+| Volume | Volume against its recent average, scaled on balance volume |
+| Long memory | Fractionally differenced log price |
+| Market conditions | VIX level, VIX rank against the past year |
+
+Two of these deserve a note:
+
+**Fractional differencing.** Raw prices trend and drift, which breaks most models. Daily returns fix that but throw away all memory of the price level. Fractional differencing sits in between: it removes most of the drift while keeping some level information.
+
+**The VIX rank is trailing.** It compares today's VIX to the past 252 days only. Ranking against the whole history would tell the model about future volatility, which is a subtle form of cheating.
+
+## How it is tested
+
+**Target.** Will the stock close higher tomorrow? There is also a three class version that adds a "flat" label for moves under 0.5 percent.
+
+**Models.** Logistic regression as a simple, readable baseline, and a random forest as the main model: 300 trees, max depth 6, at least 50 samples per leaf. Those settings are deliberately restrictive, because daily direction is mostly noise and a deeper model would just memorize it.
+
+**Walk forward validation.** Train on two years, predict the next six months, move the window forward, repeat. Joining the test blocks gives one continuous set of predictions on data the model never trained on. Shuffling time series data randomly lets a model learn from the future and inflates every number, which is the most common mistake in this kind of project.
+
+**Scaling per window.** The feature scaler is fit on training rows only. Fitting it on everything would leak the test period's averages into training.
+
+**Purging.** The last day of each training window is dropped, because its label depends on the first test day's price.
+
+**Backtest.** A custom day by day engine, no outside backtesting library. Each stock the model likes gets an equal share of the portfolio, unused money sits in cash earning nothing, and every trade pays 7.5 basis points by default. Costs are charged on real turnover, comparing the new target against what the portfolio actually holds after prices moved. Both benchmarks run through the same engine, so any difference comes from the signals and not the accounting.
+
+## Proving there is no lookahead
+
+`tests/test_leakage.py` does this empirically. It computes every feature on the full price history, then recomputes it on the history cut off at a chosen day, and requires every value on that day to match. A feature that peeked at the future would change when the future is removed, and the test would fail. Other tests confirm the VIX rank is trailing, labels depend only on realized future returns, and the last rows carry no label.
+
+`tests/test_backtest.py` checks the portfolio math by hand on a two day example, including equity, costs, and turnover.
+
+## Results, 15 stocks
+
+| Strategy | Yearly growth | Sharpe | Max drawdown |
+|---|---|---|---|
+| ML model | 6.8% | 0.54 | -34.5% |
+| Buy and hold | 10.0% | 1.21 | -40.3% |
+| Moving average rule | 14.4% | 1.27 | -21.8% |
+
+The model loses on every count. It trails both benchmarks on return per unit of risk, its yearly alpha is -5.2%, and trading costs eat 48 percent of what it earns before costs. Accuracy is 50.2 percent against 53.1 percent for always guessing the more common outcome, and ROC-AUC is 0.500, which means no ranking skill at all.
+
+The one thing it does well is take less risk. Its beta to the basket is 0.39 and it holds cash during weak stretches, so its drawdown is smaller than buy and hold.
+
+**By market volatility:**
+
+| Regime | Trading days | ML Sharpe |
+|---|---|---|
+| Calm (VIX under 20) | 1,729 | 0.31 |
+| Normal (VIX 20 to 30) | 607 | 0.65 |
+| Stressed (VIX over 30) | 154 | 1.40 |
+
+Results do get better as volatility rises, which is the pattern the project was built to look for. The catch is that the stressed regime covers only 154 days, so that 1.40 could easily be luck. It is reported as a possible pattern, not a finding.
+
+## Model checks
+
+`scripts/run_experiments.py` reruns the whole pipeline with one thing changed and saves results to `results/`, which the dashboard displays. Every check uses the same windows, backtest, and costs.
+
+**Ablation.** Remove one feature family, retrain, compare:
+
+| Removed | Sharpe | Change |
+|---|---|---|
+| Nothing (all 17) | 0.54 | |
+| Trend | 0.49 | -0.05 |
+| Momentum | 0.44 | -0.10 |
+| Volatility | 0.60 | +0.06 |
+| Volume | 0.61 | +0.07 |
+| Long memory | 0.62 | +0.08 |
+| VIX | 0.67 | +0.13 |
+
+Momentum and trend features help. The rest hurt slightly, and the VIX features hurt most, which is awkward for a project about volatility regimes and is reported as is. ROC-AUC stays at about 0.50 in every version, so none of these changes create real skill.
+
+**Tuning.** Searching tree depth and leaf size inside each training window, scored by ROC-AUC on later dates within that window, raised Sharpe from 0.54 to 0.68 but left AUC at 0.500. The settings it picked jumped around between windows, so the gain looks like luck in which days the model sat in cash rather than a better model.
+
+**PCA.** The first 3 components hold 73 percent of the variation in all 17 features, and 7 reach 90 percent, so the indicators overlap heavily. Training on components did not help: 0.47 keeping 90 percent of variance, 0.58 with 5 components.
+
+**S&P 500.** The same model on about 500 stocks, to check whether the conclusion holds on a much bigger, more varied universe. Results land in `results/sp500/`.
+
+## Scaling to the S&P 500
+
+At roughly 1.5 million daily rows, a single file loaded into pandas stops being a good idea, so `src/large_data.py` uses three techniques:
+
+1. **Partitioned columnar storage.** Prices are written as `data/sp500/ticker=AAPL/year=2020/part-0.parquet`. Parquet stores columns separately and compressed, so reading only the closing price never touches the other columns.
+2. **Partition pruning.** Ticker and year filters are pushed down to pyarrow, which skips entire folders before reading anything.
+3. **Parallel feature engineering.** Stocks are independent, so features are computed across CPU cores. A test confirms the parallel output matches the serial output exactly. Building features for 1.45 million rows takes under 3 seconds.
+
+The dataset itself is not committed because of its size. Saved results are.
 
 ## Setup
 
 ```bash
-python -m venv .venv && source .venv/bin/activate     # optional
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
-
-Python 3.10+.
 
 ## Running it
 
 ```bash
-# 1. Build the local data cache (needs internet; hits Yahoo Finance via yfinance)
-python -m src.data                 # add --force to re-download
-
-# 2. Run the full research pipeline and print headline results
-python scripts/run_pipeline.py --model rf --target binary
-python scripts/run_pipeline.py --model logreg --target 3class
-
-# 3. Launch the dashboard
-streamlit run app.py
-
-# 4. Run the test suite (works offline on synthetic data)
-pytest -q
+streamlit run app.py                                  # the dashboard
+python scripts/run_pipeline.py --model rf             # headline results in the terminal
+python scripts/run_pipeline.py --model logreg --tune  # try the baseline model with tuning
+python scripts/run_experiments.py                     # all model checks
+pytest -q                                             # 38 tests, runs offline
 ```
 
-The data download runs on your machine, where yfinance has network access; every
-downstream step reads the local cache.
-
-## Methodology and how leakage is prevented
-
-The single most common bug in this kind of project, and the first thing a technical
-interviewer probes, is lookahead: letting day *t*'s decision use information that
-wasn't knowable until after day *t*. This project defends against it structurally and
-then **verifies the defense empirically**.
-
-**Timing convention.** Indicators are calculated causally and shifted forward one
-session, so a feature row `X_t` contains data through the *close of t-1*. The signal is
-therefore available before the day-*t* close-auction cutoff. The model predicts the sign
-of the *t → t+1* close-to-close return, and the backtest enters at the close of *t*.
-
-**Causal features only.** Every indicator uses backward-looking windows
-(`.rolling()`, `.ewm()`, or `src/indicators.py`), no centered windows, no `.shift(-k)`
-in any feature. The VIX percentile is a **trailing 252-day** rank, not a full-sample
-rank; a full-sample percentile would leak the future distribution of volatility into
-every past row. The only forward-looking operation in the entire pipeline is the
-label itself (which is what a target *is*).
-
-**Per-fold scaling.** Standardization is fit on each walk-forward fold's *training* rows
-only, then applied to the test rows. Fitting a scaler on the whole series would leak
-test-period means and variances into training, a quieter cousin of the same bug.
-
-**Fractional differentiation.** Most technical features discard the price level's long
-memory, while raw prices are highly persistent. The pipeline adds a
-fractionally-differenced log-price feature (fixed-width-window method, order *d = 0.4*)
-to reduce persistence while retaining some level information. This fixed order is a
-modeling assumption, not a guarantee that every transformed series is stationary. The
-filter is causal and covered by the same invariance tests as every other feature.
-
-**Walk-forward, not a random split.** Train on a rolling ~2-year window, test on the
-next ~6 months, roll forward. Concatenating the non-overlapping test blocks yields one
-continuous out-of-sample series. The final label horizon is purged from every training
-window so a training target cannot use the first test date's close. A random 80/20 split
-on time-series data lets the model train on the future and is a methodological error.
-
-**Verification (`tests/test_leakage.py`).** The key test,
-`test_feature_truncation_invariance`, computes features on the full history, then
-recomputes them on the history *truncated* at day *t*, and asserts every feature value
-at *t* matches to tight numerical tolerance. If any
-feature had peeked past *t*, removing the future would change it and the test would fail.
-Additional tests confirm the VIX percentile is trailing, labels depend only on the
-realized forward return, and the final rows (no known future) carry no label.
-
-## The backtest engine
-
-Built from scratch (no black-box library) so every line is explainable. It takes target
-weights and realized forward returns, marks holdings through each return, and computes
-the next rebalance against the resulting drifted weights. The buy-and-hold benchmark
-makes one initial equal-weight purchase and then lets weights drift without rebalancing.
-
-- **Position sizing:** fixed fraction of capital per position, equal-weighted across the
-  universe. Each name gets `1/N` when signaled long, `0` otherwise; unused capital sits
-  in cash earning nothing (conservative).
-- **Costs:** turnover compares the new target with the actual pre-trade weights after
-  market drift, charged at `cost_bps/1e4` per unit (default 7.5 bps, adjustable).
-
-`test_backtest.py` hand-checks the accounting (equity, cost, turnover) on a two-day
-example, plus zero-cost and zero-position edge cases.
-
-## Evaluation framing
-
-**Primary:** Sharpe, Sortino, max drawdown, win rate, average win/loss, CAGR,
-annualized volatility, all net of costs.
-
-**Secondary:** classification accuracy, reported but explicitly demoted.
-
-**Benchmarks to beat, in order of rigor:** (1) equal-weight buy-and-hold on the same
-universe, then (2) a naive moving-average crossover rule. The ML model has to clear
-*both*, not just the market.
-
-**Regime split:** performance is reported separately for calm (VIX < 20), normal
-(20-30), and stressed (VIX > 30) days using the most recent VIX close available before
-each trade. ML performance is shown alongside both benchmarks and active return versus
-buy-and-hold; the splits are descriptive rather than formal significance tests.
-
-## Model checks
-
-`scripts/run_experiments.py` reruns the full pipeline with one thing changed at a time
-and saves the results to `results/<universe>/`. The dashboard shows them under
-**Extra model checks**. Every check uses the same walk forward windows, backtest, and
-costs as the main model, and every scaler, PCA, and tuning step is fit on training
-rows only.
-
-| Check | What it does | Why it matters |
-|---|---|---|
-| **ROC-AUC** | Scores how well the predicted up probability ranks up days above other days, overall and per window | Accuracy looks bad when one outcome is more common (always guessing "up" scores about 53%). AUC is not affected by that, so 0.5 cleanly means no skill |
-| **Ablation** | Removes one feature family (trend, momentum, volatility, volume, long memory, VIX), retrains, and compares | Shows which inputs actually help. Removing the VIX features is a direct test of H2 |
-| **Tuning** | Grid searches tree depth and leaf size inside each two year training window, using three time ordered splits scored by ROC-AUC | Tests whether fixed settings leave performance on the table, without ever using test data to choose settings |
-| **PCA** | Measures how much the 17 features overlap, then trains on principal components | Many indicators measure the same trend. Fewer, cleaner inputs can reduce noise |
-| **S&P 500** | Runs the same model on about 500 stocks | Checks whether the result holds on a much larger, more varied universe |
-
-```bash
-python scripts/run_experiments.py                        # all checks, 15 stocks
-python scripts/run_experiments.py --only ablation pca    # choose checks
-```
-
-Tuning is the slowest check because it adds 18 model fits per window.
-
-### Scaling to the S&P 500
-
-At about 500 tickers and 1.5 million daily rows, loading one big file into pandas stops
-being practical, so `src/large_data.py` uses three big data techniques:
-
-1. **Partitioned Parquet storage.** Prices are written as a Hive partitioned dataset,
-   `data/sp500/ticker=AAPL/year=2020/part-0.parquet`. Parquet is columnar and
-   compressed, so reading only `close` never touches the other columns.
-2. **Partition pruning.** `large_data.load_prices(tickers=..., start_year=...)` pushes
-   filters down to pyarrow, which skips whole folders before any data is read.
-3. **Parallel feature engineering.** Tickers are independent, so
-   `features.add_features(..., n_jobs=-1)` spreads them across CPU cores with joblib.
-   A test confirms the parallel output matches the serial output exactly.
-
-```bash
-python -m src.large_data                                           # download (needs internet)
-python scripts/run_experiments.py --universe sp500 --only main     # run the model
-```
-
-The S&P 500 dataset is not committed to git because of its size; the saved results in
-`results/sp500/` are.
+The cached data covers everything above. To refresh prices, run `python -m src.data --force`, which needs internet. For the S&P 500 universe, run `python -m src.large_data` first, then `python scripts/run_experiments.py --universe sp500 --only main`.
 
 ## Honest limitations
 
-This section exists so the project holds up under questioning rather than falling apart.
-
-- **Daily close-auction execution is idealized.** Signals use prior-session data and can
-  be submitted before the close, but real fills still face auction imbalance, market
-  impact beyond the flat cost, and operational latency.
-- **Survivorship and point-in-time membership.** The universe is today's large-caps; a
-  fully point-in-time study would reconstruct index membership historically. Auto-adjusted
-  prices also fold splits/dividends back in a way that is uniform but not strictly
-  point-in-time at the corporate-action boundary.
-- **Costs are a flat estimate.** 7.5 bps per unit turnover is defensible for liquid
-  large-caps but is a single number, not a modeled cost curve. Results are shown as a
-  function of this assumption in the app.
-- **Multiple-comparisons / researcher degrees of freedom.** Choosing indicators,
-  windows, thresholds, and the ±0.5% deadband is a form of search. Walk-forward guards
-  against in-sample overfitting but not against the meta-overfitting of trying many
-  designs; treat a single strong Sharpe with appropriate skepticism.
-- **Sharpe/Sortino use a ~0 risk-free rate** at daily granularity, which slightly
-  flatters absolute levels; comparisons across strategies (all treated identically) are
-  the meaningful part.
-- **S&P 500 survivorship bias.** The large universe uses today's index members, so
-  companies that were removed (often after falling) are missing from history. Results
-  on that universe are likely better than a point in time study would show.
-- **No leverage, no intraday, no regime-conditional sizing** in the baseline, these are
-  natural extensions, not claims made here.
+1. **Execution is idealized.** Signals are known before the closing auction, but real fills face order imbalance, market impact beyond the flat cost, and delays.
+2. **Survivorship bias.** The stock lists are today's members, so companies that were dropped, often after falling, are missing. This flatters results, and more so for the S&P 500 universe.
+3. **Costs are one flat number.** 7.5 basis points is reasonable for large, liquid stocks, but it is an estimate rather than a modeled cost curve. The dashboard slider shows how much the result moves with it.
+4. **Many choices were searched.** Picking indicators, windows, and the 0.5 percent flat band is its own form of fitting. Walk forward testing guards against overfitting within a run, not against trying many designs.
+5. **Sharpe and Sortino assume a zero risk free rate**, which flatters absolute levels. Comparisons between strategies are unaffected, since all are treated the same way.
+6. **No shorting, no leverage, no intraday data, and no sizing by confidence.** Those are natural extensions, not claims made here.
 
 ## Project structure
 
 ```
-.
-├── app.py                     # Streamlit dashboard (live view of the pipeline)
-├── requirements.txt
-├── scripts/
-│   ├── run_pipeline.py        # CLI entry point
-│   └── run_experiments.py     # ablation, tuning, PCA, S&P 500 checks
-├── results/                   # saved check results shown in the dashboard
-├── src/
-│   ├── config.py              # universe, windows, walk-forward + backtest params
-│   ├── data.py                # yfinance + VIX download and caching
-│   ├── indicators.py          # indicator math (replaces the ta package)
-│   ├── features.py            # causal technical indicators + feature groups
-│   ├── labeling.py            # binary + 3-class targets
-│   ├── models.py              # logreg / rf factory
-│   ├── walkforward.py         # rolling-origin validation, tuning, PCA, ROC-AUC
-│   ├── experiments.py         # ablation, tuning, and PCA comparisons
-│   ├── large_data.py          # S&P 500 partitioned Parquet storage
-│   ├── backtest.py            # custom day-by-day engine + weight builders
-│   ├── benchmarks.py          # buy-and-hold + MA crossover
-│   ├── evaluation.py          # Sharpe/Sortino/drawdown/win-rate/accuracy
-│   ├── regime.py              # VIX-regime performance split
-│   └── pipeline.py            # end-to-end glue (used by CLI and app)
-├── tests/
-│   ├── conftest.py            # synthetic OHLCV + VIX fixtures (offline)
-│   ├── test_leakage.py        # truncation-invariance no-lookahead proof
-│   ├── test_backtest.py       # hand-checked accounting
-│   ├── test_fracdiff.py        # fractional-difference causality/persistence
-│   ├── test_indicators.py     # indicator math matches the original ta values
-│   ├── test_extensions.py     # AUC, ablation, PCA, tuning splits, Parquet storage
-│   └── test_pipeline.py       # end-to-end smoke test
-└── data/                      # parquet cache (created by src/data.py)
+app.py                      Streamlit dashboard
+src/
+  config.py                 universe, windows, costs, tuning grids
+  data.py                   price and VIX download and cache
+  indicators.py             indicator math
+  features.py               the 17 causal features, grouped by family
+  labeling.py               up or down, and up, flat, or down targets
+  models.py                 logistic regression and random forest
+  walkforward.py            time ordered validation, tuning, PCA, ROC-AUC
+  backtest.py               day by day portfolio engine
+  benchmarks.py             buy and hold, moving average rule
+  evaluation.py             Sharpe, Sortino, drawdown, accuracy, AUC
+  regime.py                 results split by VIX level
+  pipeline.py               end to end glue used by the app and scripts
+  experiments.py            ablation, tuning, and PCA comparisons
+  large_data.py             S&P 500 partitioned storage
+scripts/
+  run_pipeline.py           command line run
+  run_experiments.py        model checks
+tests/                      8 test files, including the no lookahead proof
+results/                    saved check results shown in the dashboard
+data/                       cached prices and VIX
 ```
 
-## A note on the test results you'll see
+## Data source
 
-On synthetic random-walk data (used by the test suite), the pipeline correctly finds
-**no edge**, ~50% accuracy and a Sharpe below buy-and-hold. That is the *right* result:
-a leaking pipeline would instead report suspiciously strong out-of-sample numbers on
-data that contains no signal. Passing that sniff test is part of why the leakage tests
-matter.
-
-## Live dashboard
-
-The Streamlit app is deployable as-is on Streamlit Community Cloud. Point a new app at
-this repository, branch `main`, main file `app.py`.
-
-A small price and VIX cache is committed under `data/` so the deployed app renders
-immediately and does not depend on Yahoo Finance being reachable from the host. To work
-with fresher data locally, run `python -m src.data --force` to rebuild the cache.
-
-## Repository layout
-
-```
-app.py            Streamlit dashboard, imports the same src/ modules as the CLI
-src/              research pipeline (data, features, labeling, models,
-                  walkforward, backtest, benchmarks, evaluation, regime, config)
-scripts/          command line entry points
-tests/            pytest suite, including an empirical no-lookahead check
-data/             cached daily prices and VIX (parquet)
-```
-
-## Data
-
-Daily OHLCV and VIX history retrieved from Yahoo Finance via `yfinance`. The cached
-parquet files in `data/` are a snapshot for reproducibility and convenience.
-
-## License
-
-MIT, see `LICENSE`. This is a research and coursework project. Nothing here is
-investment advice.
+Daily prices and VIX from Yahoo Finance via yfinance. This is a research project, not investment advice.
