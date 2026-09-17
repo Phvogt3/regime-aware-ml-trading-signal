@@ -1,0 +1,17 @@
+{
+  "universe": "sp500",
+  "model": "rf",
+  "target": "binary",
+  "tickers": 502,
+  "price_rows": 1510497,
+  "feature_rows": 1448148,
+  "cost_bps": 7.5,
+  "date_start": "2014-07-03",
+  "date_end": "2026-06-30",
+  "last_run_minutes": 7.3,
+  "storage": {
+    "files": 6286,
+    "megabytes": 96.960537,
+    "tickers": 502
+  }
+}

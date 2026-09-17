@@ -1,0 +1,12 @@
+{
+  "universe": "default",
+  "model": "rf",
+  "target": "binary",
+  "tickers": 15,
+  "price_rows": 50256,
+  "feature_rows": 45225,
+  "cost_bps": 7.5,
+  "date_start": "2014-07-03",
+  "date_end": "2026-06-30",
+  "last_run_minutes": 15.4
+}

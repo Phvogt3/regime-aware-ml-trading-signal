@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.ipynb_checkpoints/
+.DS_Store
+.Rhistory
+.vscode/
+.idea/
+*.egg-info/
+
+# NOTE: data/*.parquet is intentionally NOT ignored.
+# The cached price and VIX snapshot is committed (2.3 MB) so the deployed
+# Streamlit app renders without needing network access to Yahoo Finance.
+
+# S&P 500 partitioned dataset is large; results/ is committed instead.
+data/sp500/
