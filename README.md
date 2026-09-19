@@ -4,6 +4,8 @@ Can a machine learning model built from technical indicators beat simple strateg
 
 **Short answer: no.** The model earns positive returns but well below buy and hold on a risk adjusted basis, and its ROC-AUC of 0.500 means it has no real skill at ranking days. Scaling from 15 stocks to 502 makes the gap worse, not better. The value of this project is that the result is measured honestly, with no lookahead, real trading costs, and a test that proves the model never sees the future.
 
+[Dashboard link](https://phvogt3-regime-aware-ml-trading-signal-app-uophii.streamlit.app/)
+
 Python 3.12
 
 ## The question
